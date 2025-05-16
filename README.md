@@ -1,0 +1,3 @@
+n维rope的两种rs实现
+
+支持设置rope_section, 不设置则默认均分
