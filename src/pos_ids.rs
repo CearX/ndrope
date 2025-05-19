@@ -1,3 +1,36 @@
+pub fn build_pos_ids_nd(shape: Vec<usize>) -> Vec<u32> {
+    assert!(!shape.is_empty(), "shape must not be empty");
+    let dim = shape.len();
+    let total_size: usize = shape.iter().product();
+    let mut pos = vec![0; total_size * dim];
+
+    let mut strides = vec![1; dim];
+    for i in (0..dim - 1).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1];
+    }
+
+    for idx in 0..total_size {
+        let mut remainder = idx;
+        for d in 0..dim {
+            pos[idx * dim + d] = (remainder / strides[d]) as u32;
+            remainder %= strides[d];
+        }
+    }
+
+    pos
+}
+
+#[test]
+fn test_pos_ids_nd() {
+    let mid_dims = vec![2, 2, 3, 4];
+    let len = mid_dims.len();
+    let pos = build_pos_ids_nd(mid_dims);
+    let pos = pos.chunks(len).map(|x| x.to_vec()).collect::<Vec<_>>();
+    for chunk in &pos {
+        println!("pos_ids: {:?}", chunk);
+    }
+}
+
 pub fn pos_qwen2vl([h, w]: [usize; 2], d_patch: usize) -> Vec<u32> {
     let h = h / d_patch;
     let w = w / d_patch;
@@ -28,18 +61,20 @@ fn test_pos_qwen2vl() {
 #[test]
 fn test_qwen2vl_2d_mrope() {
     use crate::rope_m;
-    let shape = [24, 34, 80];
-    let nh = 16;
+    let shape = [16, 24, 34, 80];
+    let nh = shape[0];
     let dh = shape[shape.len() - 1];
-    let mid: usize = shape.iter().product::<usize>() / dh;
+    let mid: usize = shape.iter().product::<usize>() / (nh * dh);
 
     let pos_ids = pos_qwen2vl([336, 476], 14);
 
     // -------m--------
     let x1: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x1设为递增序列
-    let x1 = rope_m(x1, Some(pos_ids), None, nh, &shape);
+    let x1 = rope_m(x1, &shape, Some(pos_ids), None);
 
     let start = 1145;
     let end = start + 20;
     println!("x {}:{}  {:?}", start, end, &x1[start..end]);
+
+    // crate::permute::test_permute_nm(&shape, None);
 }
