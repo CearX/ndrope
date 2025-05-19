@@ -1,3 +1,5 @@
+pub mod pos_ids;
+
 struct Scheme {
     nh: usize,
     dh: usize,
@@ -189,6 +191,7 @@ fn test_pos_ids_nd() {
 
 pub fn rope(
     mut x: Vec<f32>,
+    pos_ids: Option<Vec<u32>>,
     rope_section: Option<Vec<usize>>,
     nh: usize,
     shape: &[usize],
@@ -206,8 +209,10 @@ pub fn rope(
     assert_eq!(rope_section.len(), mid_dims.len());
     assert_eq!(dh / 2, rope_section.iter().sum());
 
-    // 生成位置编码和 sin/cos; 例如3维时，pos_ids: [h*w*t, 3], sin/cos: [row_max, col_max]
-    let pos = build_pos_ids_nd(mid_dims.to_vec());
+    // 位置编码, 例如3维时，pos_ids: [h*w*t, 3]
+    let pos = pos_ids.unwrap_or_else(|| build_pos_ids_nd(mid_dims.to_vec()));
+
+    // sin/cos: [row_max, col_max]
     let row_max = mid_dims.iter().max().unwrap();
     let col_max = rope_section.iter().max().unwrap();
     let theta = 10000.0;
@@ -248,20 +253,22 @@ pub fn rope(
 
 pub fn rope_nd(
     x: Vec<f32>,
+    pos_ids: Option<Vec<u32>>,
     rope_section: Option<Vec<usize>>,
     nh: usize,
     shape: &[usize],
 ) -> Vec<f32> {
-    rope(x, rope_section, nh, shape, true)
+    rope(x, pos_ids, rope_section, nh, shape, true)
 }
 
 pub fn rope_m(
     x: Vec<f32>,
+    pos_ids: Option<Vec<u32>>,
     rope_section: Option<Vec<usize>>,
     nh: usize,
     shape: &[usize],
 ) -> Vec<f32> {
-    rope(x, rope_section, nh, shape, false)
+    rope(x, pos_ids, rope_section, nh, shape, false)
 }
 
 #[test]
@@ -273,7 +280,7 @@ fn test_n() {
 
     // -------nd--------
     let x: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x设为递增序列
-    let x = rope_nd(x, None, nh, &shape);
+    let x = rope_nd(x, None, None, nh, &shape);
 
     let x = x.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
     for chunk in &x {
@@ -290,7 +297,7 @@ fn test_m() {
 
     // -------m--------
     let x1: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x1设为递增序列
-    let x1 = rope_m(x1, None, nh, &shape);
+    let x1 = rope_m(x1, None, None, nh, &shape);
 
     let x1 = x1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
     for chunk in &x1 {
@@ -307,7 +314,7 @@ fn test_nm() {
 
     // -------nd--------
     let x: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x设为递增序列
-    let x = rope_nd(x, None, nh, &shape);
+    let x = rope_nd(x, None, None, nh, &shape);
 
     let x = x.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
     for chunk in &x {
@@ -316,7 +323,7 @@ fn test_nm() {
 
     // -------m--------
     let x1: Vec<f32> = vec![0.0, 2.0, 1.0, 3.0, 4.0, 6.0, 5.0, 7.0];
-    let x1 = rope_m(x1, None, nh, &shape);
+    let x1 = rope_m(x1, None, None, nh, &shape);
 
     let x1 = x1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
     for chunk in &x1 {
@@ -343,7 +350,7 @@ pub fn test_permute_nm(nh: usize, shape: Vec<usize>, rope_section: Option<Vec<us
     let wq = Array2::from_shape_vec((dim, dim), wq).unwrap();
     let q = x.dot(&wq.t()).into_raw_vec_and_offset().0;
 
-    let r_q = rope_nd(q, rope_section.clone(), nh, &shape);
+    let r_q = rope_nd(q, None, rope_section.clone(), nh, &shape);
 
     println!("r_q:");
     let data = &r_q.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
@@ -364,7 +371,7 @@ pub fn test_permute_nm(nh: usize, shape: Vec<usize>, rope_section: Option<Vec<us
     let wq1 = permute.to_shape((dim, dim)).unwrap();
     let q1 = x1.dot(&wq1.t()).into_raw_vec_and_offset().0;
 
-    let r_q1 = rope_m(q1, rope_section.clone(), nh, &shape);
+    let r_q1 = rope_m(q1, None, rope_section.clone(), nh, &shape);
 
     println!("r_q1:");
     let data = &r_q1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
