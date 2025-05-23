@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 ndarray = "0.16.1"
+half = "2.4"
+digit-layout = "0.2.0"
+ndarray-layout = "0.2.1"
