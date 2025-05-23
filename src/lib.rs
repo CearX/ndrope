@@ -1,6 +1,13 @@
 pub mod permute;
 pub mod pos_ids;
 
+use digit_layout::{DigitLayout, types};
+use half::f16;
+use std::{
+    fmt::Display,
+    ops::{Add, Mul, Sub},
+};
+
 use pos_ids::build_pos_ids_nd;
 
 struct Scheme {
@@ -23,9 +30,21 @@ struct Scheme {
     cos: *const u8,
     rope_section: *const u8,
 }
+trait Pos: Copy {
+    fn pos(&self) -> usize;
+}
+
+impl Pos for u32 {
+    fn pos(&self) -> usize {
+        *self as _
+    }
+}
+
+trait Data: Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Copy {}
+impl<T> Data for T where T: Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Copy {}
 
 impl Scheme {
-    fn calculate_nd(&self) {
+    fn calculate_nd<T: Data + Display, U: Pos>(&self) {
         let &Self {
             nh,
             dh,
@@ -79,7 +98,7 @@ impl Scheme {
         }
     }
 
-    fn calculate_m(&self) {
+    fn calculate_m<T: Data + Display, U: Pos>(&self) {
         let &Self {
             nh,
             dh,
@@ -100,14 +119,14 @@ impl Scheme {
             rope_section,
         } = self;
 
-        let x = x.cast::<f32>();
-        let pos = pos.cast::<u32>();
-        let sin = sin.cast::<f32>();
-        let cos = cos.cast::<f32>();
+        let x = x.cast::<T>();
+        let pos = pos.cast::<U>();
+        let sin = sin.cast::<T>();
+        let cos = cos.cast::<T>();
         let rope_section = rope_section.cast::<u32>();
 
         let dh = dh / 2;
-        let s_x_2 = size_of::<f32>() as isize;
+        let s_x_2 = size_of::<T>() as isize;
         for i in 0..nh * mid * dh {
             let i0 = (i / (mid * dh)) as isize;
             let i1 = ((i / dh) % (mid)) as isize;
@@ -126,8 +145,11 @@ impl Scheme {
             }
             let i4 = remaining as isize;
 
-            let pos =
-                unsafe { pos.byte_offset(i1 * s_pos_0 + i3 as isize * s_pos_1).read() } as isize;
+            let pos = unsafe {
+                pos.byte_offset(i1 * s_pos_0 + i3 as isize * s_pos_1)
+                    .read()
+                    .pos()
+            } as isize;
             let sin = unsafe { sin.byte_offset(pos * s_sin_0 + i4 * s_sin_1).read() };
             let cos = unsafe { cos.byte_offset(pos * s_cos_0 + i4 * s_cos_1).read() };
 
@@ -160,16 +182,23 @@ fn build_sin_cos_table(
 }
 
 pub fn rope(
-    mut x: Vec<f32>,
+    x: &&mut [u8],
+    dt: digit_layout::DigitLayout,
+    offset: usize,
+    shape_o: &[usize],
+    strides: &[isize],
     shape: &[usize],
     pos_ids: Option<Vec<u32>>,
     rope_section: Option<Vec<usize>>,
     is_nd: bool,
-) -> Vec<f32> {
+) {
     let nh = shape[0];
     let dh = shape[shape.len() - 1];
     let mid: usize = shape.iter().product::<usize>() / (nh * dh);
     let mid_dims = &shape[1..shape.len() - 1];
+
+    assert_eq!(shape_o.len(), 3);
+    assert_eq!(strides.len(), 3);
 
     // 如果 rope_section 为 None，则每个维度均分dh/2
     let rope_section = rope_section.unwrap_or_else(|| {
@@ -190,6 +219,13 @@ pub fn rope(
 
     let rope_section = rope_section.iter().map(|&x| x as u32).collect::<Vec<_>>();
 
+    let size = match dt {
+        types::F16 => size_of::<f16>(),
+        types::F32 => size_of::<f32>(),
+        types::F64 => size_of::<f64>(),
+        _ => todo!(),
+    };
+
     // 创建 Scheme 实例
     let scheme = Scheme {
         nh,
@@ -197,104 +233,144 @@ pub fn rope(
         mid,
         n: rope_section.len(),
         rope_section: rope_section.as_ptr() as *const u8,
-        s_x_0: (mid * dh) as isize * size_of::<f32>() as isize,
-        s_x_1: dh as isize * size_of::<f32>() as isize,
+        // s_x_0: (mid * dh) as isize * size as isize,
+        // s_x_1: dh as isize * size as isize,
+        s_x_0: strides[0],
+        s_x_1: strides[1],
         s_pos_0: (mid_dims.len()) as isize * size_of::<u32>() as isize,
         s_pos_1: size_of::<u32>() as isize,
-        s_sin_0: (col_max * size_of::<f32>()) as isize,
-        s_sin_1: size_of::<f32>() as isize,
-        s_cos_0: (col_max * size_of::<f32>()) as isize,
-        s_cos_1: size_of::<f32>() as isize,
-        x: x.as_mut_ptr() as *mut u8,
+        s_sin_0: (col_max * size) as isize,
+        s_sin_1: size as isize,
+        s_cos_0: (col_max * size) as isize,
+        s_cos_1: size as isize,
+        x: unsafe { (*x).as_ptr().byte_offset(offset as isize) } as *mut u8,
         pos: pos.as_ptr() as *const u8,
         sin: sin.as_ptr() as *const u8,
         cos: cos.as_ptr() as *const u8,
     };
 
-    // 根据 is_nd 调用不同的计算方法
+    // 根据 is_nd和dt 调用不同的计算方法
     if is_nd {
-        scheme.calculate_nd();
+        match (dt, types::U32) {
+            (types::F16, types::U32) => scheme.calculate_nd::<f16, u32>(),
+            (types::F32, types::U32) => scheme.calculate_nd::<f32, u32>(),
+            _ => todo!(),
+        };
     } else {
-        scheme.calculate_m();
-    }
-
-    x
+        match (dt, types::U32) {
+            (types::F16, types::U32) => scheme.calculate_m::<f16, u32>(),
+            (types::F32, types::U32) => scheme.calculate_m::<f32, u32>(),
+            _ => todo!(),
+        };
+    };
 }
 
 pub fn rope_nd(
-    x: Vec<f32>,
+    x: &&mut [u8],
+    dt: DigitLayout,
+    offset: usize,
+    shape_o: &[usize],
+    strides: &[isize],
     shape: &[usize],
     pos_ids: Option<Vec<u32>>,
     rope_section: Option<Vec<usize>>,
-) -> Vec<f32> {
-    rope(x, shape, pos_ids, rope_section, true)
+) {
+    rope(
+        x,
+        dt,
+        offset,
+        shape_o,
+        strides,
+        shape,
+        pos_ids,
+        rope_section,
+        true,
+    );
 }
 
 pub fn rope_m(
-    x: Vec<f32>,
+    x: &&mut [u8],
+    dt: DigitLayout,
+    offset: usize,
+    shape_o: &[usize],
+    strides: &[isize],
     shape: &[usize],
     pos_ids: Option<Vec<u32>>,
     rope_section: Option<Vec<usize>>,
-) -> Vec<f32> {
-    rope(x, shape, pos_ids, rope_section, false)
+) {
+    rope(
+        x,
+        dt,
+        offset,
+        shape_o,
+        strides,
+        shape,
+        pos_ids,
+        rope_section,
+        false,
+    );
 }
 
-#[test]
-fn test_n() {
-    let shape = [1, 2, 4]; // [nh, seq, dh]
-    let nh = shape[0];
-    let dh = shape[shape.len() - 1];
-    let mid: usize = shape.iter().product::<usize>() / (nh * dh);
+// 1.no return
+// 2.grid
+// 3.层次： cal -> rope(scheme) -> rope_nd/m
 
-    // -------nd--------
-    let x: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x设为递增序列
-    let x = rope_nd(x, &shape, None, None);
+// #[test]
+// fn test_n() {
+//     let shape = [1, 2, 4]; // [nh, seq, dh]
+//     let nh = shape[0];
+//     let dh = shape[shape.len() - 1];
+//     let mid: usize = shape.iter().product::<usize>() / (nh * dh);
 
-    let x = x.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
-    for chunk in &x {
-        println!("{:?}", chunk);
-    }
-}
+//     // -------nd--------
+//     let x: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x设为递增序列
+//     let x = rope_nd(x, &shape, None, None);
 
-#[test]
-fn test_m() {
-    let shape = [1, 2, 4]; // [nh, seq, dh]
-    let nh = shape[0];
-    let dh = shape[shape.len() - 1];
-    let mid: usize = shape.iter().product::<usize>() / (nh * dh);
+//     let x = x.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
+//     for chunk in &x {
+//         println!("{:?}", chunk);
+//     }
+// }
 
-    // -------m--------
-    let x1: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x1设为递增序列
-    let x1 = rope_m(x1, &shape, None, None);
+// #[test]
+// fn test_m() {
+//     let shape = [1, 2, 4]; // [nh, seq, dh]
+//     let nh = shape[0];
+//     let dh = shape[shape.len() - 1];
+//     let mid: usize = shape.iter().product::<usize>() / (nh * dh);
 
-    let x1 = x1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
-    for chunk in &x1 {
-        println!("{:?}", chunk);
-    }
-}
+//     // -------m--------
+//     let x1: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x1设为递增序列
+//     let x1 = rope_m(x1, &shape, None, None);
 
-#[test]
-fn test_nm() {
-    let shape = [1, 2, 4]; // [nh, seq, dh]
-    let nh = shape[0];
-    let dh = shape[shape.len() - 1];
-    let mid: usize = shape.iter().product::<usize>() / (nh * dh);
+//     let x1 = x1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
+//     for chunk in &x1 {
+//         println!("{:?}", chunk);
+//     }
+// }
 
-    // -------nd--------
-    let x: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x设为递增序列
-    let x = rope_nd(x, &shape, None, None);
+// #[test]
+// fn test_nm() {
+//     let shape = [1, 2, 4]; // [nh, seq, dh]
+//     let nh = shape[0];
+//     let dh = shape[shape.len() - 1];
+//     let mid: usize = shape.iter().product::<usize>() / (nh * dh);
 
-    let x = x.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
-    for chunk in &x {
-        println!("{:?}", chunk);
-    }
+//     // -------nd--------
+//     let x: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x设为递增序列
+//     let x = rope_nd(x, &shape, None, None);
 
-    // -------m--------
-    let x1: Vec<f32> = vec![0.0, 2.0, 1.0, 3.0, 4.0, 6.0, 5.0, 7.0];
-    let x1 = rope_m(x1, &shape, None, None);
+//     let x = x.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
+//     for chunk in &x {
+//         println!("{:?}", chunk);
+//     }
 
-    let x1 = x1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
-    for chunk in &x1 {
-        println!("{:?}", chunk);
-    }
-}
+//     // -------m--------
+//     let x1: Vec<f32> = vec![0.0, 2.0, 1.0, 3.0, 4.0, 6.0, 5.0, 7.0];
+//     let x1 = rope_m(x1, &shape, None, None);
+
+//     let x1 = x1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
+//     for chunk in &x1 {
+//         println!("{:?}", chunk);
+//     }
+// }
