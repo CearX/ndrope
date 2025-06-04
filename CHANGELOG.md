@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 支持 n 维 pos 输出 layout
+
 ## [0.1.0] - 2025-6-4
 
 ### Added

@@ -24,8 +24,9 @@ impl PosTy for u64 {
     }
 }
 
-pub fn pos_nd_default<U: PosTy + Clone>(grid: Vec<usize>) -> (Box<[U]>, DigitLayout) {
-    assert!(!grid.is_empty(), "grid must not be empty");
+pub fn pos_nd_default<U: PosTy + Clone>(
+    grid: Vec<usize>,
+) -> (Box<[U]>, DigitLayout, ArrayLayout<2>) {
     let dim = grid.len();
     let total_size: usize = grid.iter().product();
     let mut pos = vec![U::from_usize(0); total_size * dim];
@@ -46,21 +47,23 @@ pub fn pos_nd_default<U: PosTy + Clone>(grid: Vec<usize>) -> (Box<[U]>, DigitLay
     (
         pos.into(),
         U::dt(),
-        // ArrayLayout::<dim>::new(&[], &[], 0),
+        ArrayLayout::<2>::new(&[total_size, dim], &[dim as isize, 1], 0),
     )
-    // todo!()
 }
 
 #[test]
 fn test_pos_ids_nd() {
     let grid = vec![2, 2, 3, 4];
     let len = grid.len();
-    let (pos, _pos_dt) = pos_nd_default::<u64>(grid);
+    let (pos, pos_dt, pos_layout) = pos_nd_default::<u64>(grid);
+    println!("pos_dt: {:?}", pos_dt);
+    println!("pos_shape: {:?}", pos_layout.shape());
+    println!("pos_strides: {:?}", pos_layout.strides());
+    println!("pos_offset: {:?}", pos_layout.offset());
     let pos = pos.chunks(len).map(|x| x.to_vec()).collect::<Vec<_>>();
     for chunk in &pos {
         println!("pos_ids: {:?}", chunk);
     }
-    // todo!()
 }
 
 pub fn pos_2d_qwen2vl_vit<U: PosTy + Clone>(
