@@ -1,5 +1,6 @@
 use digit_layout::{DigitLayout, types};
 use ndarray_layout::ArrayLayout;
+use tensor::Tensor;
 
 pub trait PosTy {
     fn dt() -> DigitLayout;
@@ -56,20 +57,20 @@ fn test_pos_ids_nd() {
     let grid = vec![2, 2, 3, 4];
     let len = grid.len();
     let (pos, pos_dt, pos_layout) = pos_nd_default::<u64>(grid);
-    println!("pos_dt: {:?}", pos_dt);
+    println!("pos_dt: {pos_dt}");
     println!("pos_shape: {:?}", pos_layout.shape());
     println!("pos_strides: {:?}", pos_layout.strides());
     println!("pos_offset: {:?}", pos_layout.offset());
     let pos = pos.chunks(len).map(|x| x.to_vec()).collect::<Vec<_>>();
     for chunk in &pos {
-        println!("pos_ids: {:?}", chunk);
+        println!("pos_ids: {chunk:?}");
     }
 }
 
 pub fn pos_2d_qwen2vl_vit<U: PosTy + Clone>(
     [h, w]: [usize; 2],
     d_patch: usize,
-) -> (Box<[U]>, DigitLayout, ArrayLayout<2>) {
+) -> Tensor<Box<[U]>, 2> {
     let h = h / d_patch;
     let w = w / d_patch;
     let mut pos = vec![U::from_usize(0); h * w * 2];
@@ -86,11 +87,11 @@ pub fn pos_2d_qwen2vl_vit<U: PosTy + Clone>(
             }
         }
     }
-    (
-        pos.into(),
-        U::dt(),
-        ArrayLayout::<2>::new(&[h * w, 2], &[2, 1], 0),
-    )
+
+    let dt = U::dt();
+    let layout = ArrayLayout::<2>::new(&[h * w, 2], &[2, 1], 0);
+    let data = pos.into();
+    Tensor::from_raw_parts(dt, layout, data)
 }
 
 pub fn pos_3d_qwen2vl_llm<U: PosTy + Clone>() {
@@ -99,16 +100,17 @@ pub fn pos_3d_qwen2vl_llm<U: PosTy + Clone>() {
 
 #[test]
 fn test_pos_qwen2vl() {
-    let (pos, pos_dt, pos_layout) = pos_2d_qwen2vl_vit::<u64>([336, 476], 14);
-    println!("pos_dt: {:?}", pos_dt);
+    let tensor = pos_2d_qwen2vl_vit::<u64>([336, 476], 14);
+    let (pos, pos_dt, pos_layout) = (tensor.get(), tensor.dt(), tensor.layout());
+    println!("pos_dt: {pos_dt}");
     println!("pos_shape: {:?}", pos_layout.shape());
-    println!("{:?}", pos);
+    println!("pos: {pos:?}");
 }
 
 #[test]
 fn test_qwen2vl_2d_mrope_f16_u64() {
-    use crate::rope_m;
     use crate::sin_cos::sin_cos_default;
+    use crate::{rope_m, tensor};
     use half::f16;
 
     let nh = 16;
@@ -125,37 +127,18 @@ fn test_qwen2vl_2d_mrope_f16_u64() {
     let strides = [
         (mid * dh * size) as isize,
         (dh * size) as isize,
-        (1 * size) as isize,
+        size as isize,
     ];
     let offset = 0;
     let grid = [24, 34];
     let rope_section = None;
 
-    let (pos, pos_dt, pos_layout) = pos_2d_qwen2vl_vit::<u64>([336, 476], 14);
-
+    let x = tensor(x1, dt, shape, strides, offset);
+    let pos = pos_2d_qwen2vl_vit::<u64>([336, 476], 14);
     // f16的张量计算时需要传f32的sin_cos提高精度
     let theta = 10000.0;
-    let (sin, sin_dt, sin_layout, cos, cos_dt, cos_layout) =
-        sin_cos_default::<f32>(&shape, &grid, rope_section.clone(), theta);
-
-    rope_m(
-        &x1,
-        dt,
-        &shape,
-        &strides,
-        offset,
-        &grid,
-        rope_section,
-        pos,
-        pos_dt,
-        pos_layout,
-        sin,
-        sin_dt,
-        sin_layout,
-        cos,
-        cos_dt,
-        cos_layout,
-    );
+    let [sin, cos] = sin_cos_default::<f32>(&shape, &grid, rope_section.clone(), theta);
+    rope_m(x, pos, sin, cos, &grid, rope_section);
 
     // f16容量有限，递增初始化会溢出, 只看看部分值
     let out = unsafe {
@@ -179,8 +162,8 @@ fn test_qwen2vl_2d_mrope_f16_u64() {
 
 #[test]
 fn test_qwen2vl_2d_mrope_f32_u32() {
-    use crate::rope_m;
     use crate::sin_cos::sin_cos_default;
+    use crate::{rope_m, tensor};
 
     let nh = 16;
     let mid = 816;
@@ -194,41 +177,21 @@ fn test_qwen2vl_2d_mrope_f32_u32() {
     let strides = [
         (mid * dh * size) as isize,
         (dh * size) as isize,
-        (1 * size) as isize,
+        size as isize,
     ];
     let offset = 0;
     let grid = [24, 34];
     let rope_section = None;
 
-    let (pos, pos_dt, pos_layout) = pos_2d_qwen2vl_vit::<u32>([336, 476], 14);
-
+    let x = tensor(x1, dt, shape, strides, offset);
+    let pos = pos_2d_qwen2vl_vit::<u32>([336, 476], 14);
     let theta = 10000.0;
-    let (sin, sin_dt, sin_layout, cos, cos_dt, cos_layout) =
-        sin_cos_default::<f32>(&shape, &grid, rope_section.clone(), theta);
-
-    rope_m(
-        &x1,
-        dt,
-        &shape,
-        &strides,
-        offset,
-        &grid,
-        rope_section,
-        pos,
-        pos_dt,
-        pos_layout,
-        sin,
-        sin_dt,
-        sin_layout,
-        cos,
-        cos_dt,
-        cos_layout,
-    );
+    let [sin, cos] = sin_cos_default::<f32>(&shape, &grid, rope_section.clone(), theta);
+    rope_m(x, pos, sin, cos, &grid, rope_section);
 
     let out = unsafe {
         std::slice::from_raw_parts_mut(x1.as_mut_ptr() as *mut f32, nh * mid * dh * size)
     };
-
     let start = 1145;
     let end = start + 20;
     assert_eq!(

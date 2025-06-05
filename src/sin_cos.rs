@@ -1,6 +1,7 @@
 use digit_layout::{DigitLayout, types};
 use half::f16;
 use ndarray_layout::ArrayLayout;
+use tensor::Tensor;
 
 pub trait Float: Copy {
     fn dt() -> DigitLayout;
@@ -103,14 +104,7 @@ pub fn sin_cos_default<T>(
     grid: &[usize],
     rope_section: Option<Vec<usize>>,
     theta: T,
-) -> (
-    Box<[T]>,
-    DigitLayout,
-    ArrayLayout<2>,
-    Box<[T]>,
-    DigitLayout,
-    ArrayLayout<2>,
-)
+) -> [Tensor<Box<[T]>, 2>; 2]
 where
     T: Float + std::ops::Neg<Output = T> + std::ops::Div<Output = T> + std::ops::Mul<Output = T>,
 {
@@ -133,12 +127,11 @@ where
     let col_max = *(rope_section.iter().max().unwrap());
 
     let [sin, cos] = build_sin_cos_table(row_max, col_max, theta, |theta, pos| theta * pos);
-    let dt_sin = T::dt();
-    let sin_layout = ArrayLayout::<2>::new(&[row_max, col_max], &[col_max as isize, 1], 0);
-    let dt_cos = T::dt();
-    let cos_layout = ArrayLayout::<2>::new(&[row_max, col_max], &[col_max as isize, 1], 0);
+    let layout = ArrayLayout::<2>::new(&[row_max, col_max], &[col_max as isize, 1], 0);
 
-    (sin, dt_sin, sin_layout, cos, dt_cos, cos_layout)
+    let sin = Tensor::from_raw_parts(T::dt(), layout.clone(), sin);
+    let cos = Tensor::from_raw_parts(T::dt(), layout.clone(), cos);
+    [sin, cos]
 }
 
 /// row_max = seq; col_max = dh/2;
@@ -147,23 +140,14 @@ pub fn sin_cos_qwen2vl_3d_mrope<T>(
     row_max: usize,
     col_max: usize,
     theta: T,
-) -> (
-    Box<[T]>,
-    DigitLayout,
-    ArrayLayout<2>,
-    Box<[T]>,
-    DigitLayout,
-    ArrayLayout<2>,
-)
+) -> [Tensor<Box<[T]>, 2>; 2]
 where
     T: Float + std::ops::Neg<Output = T> + std::ops::Div<Output = T> + std::ops::Mul<Output = T>,
 {
     let [sin, cos] = build_sin_cos_table(row_max, col_max, theta, |theta, pos| theta * pos);
-    let dt_sin = T::dt();
-    let sin_layout = ArrayLayout::<2>::new(&[row_max, col_max], &[col_max as isize, 1], 0);
-    let dt_cos = T::dt();
-    let cos_layout = ArrayLayout::<2>::new(&[row_max, col_max], &[col_max as isize, 1], 0);
+    let layout = ArrayLayout::<2>::new(&[row_max, col_max], &[col_max as isize, 1], 0);
 
-    (sin, dt_sin, sin_layout, cos, dt_cos, cos_layout);
-    todo!()
+    let sin = Tensor::from_raw_parts(T::dt(), layout.clone(), sin);
+    let cos = Tensor::from_raw_parts(T::dt(), layout.clone(), cos);
+    [sin, cos]
 }

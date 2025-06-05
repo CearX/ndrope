@@ -9,9 +9,20 @@ use std::{
     fmt::Display,
     ops::{Add, Mul, Sub},
 };
+use tensor::Tensor;
 
 use pos_ids::PosTy;
 use sin_cos::Float;
+
+pub fn tensor<'a>(
+    x: &'a mut [u8],
+    dt: DigitLayout,
+    shape: [usize; 3],
+    strides: [isize; 3],
+    offset: isize,
+) -> Tensor<&'a mut [u8], 3> {
+    Tensor::from_raw_parts(dt, ArrayLayout::<3>::new(&shape, &strides, offset), x)
+}
 
 struct Scheme {
     nh: usize,
@@ -206,27 +217,18 @@ impl Scheme {
 }
 
 fn rope<T, U>(
-    x: &&mut [u8],
-    dt: digit_layout::DigitLayout,
-    shape: &[usize],
-    strides: &[isize],
-    offset: usize,
+    x: Tensor<&mut [u8], 3>,
+    pos: Tensor<Box<[U]>, 2>,
+    sin: Tensor<Box<[T]>, 2>,
+    cos: Tensor<Box<[T]>, 2>,
     grid: &[usize],
     rope_section: Option<Vec<usize>>,
-    pos: Box<[U]>,
-    pos_dt: DigitLayout,
-    pos_layout: ArrayLayout<2>,
-    sin: Box<[T]>,
-    sin_dt: DigitLayout,
-    sin_layout: ArrayLayout<2>,
-    cos: Box<[T]>,
-    cos_dt: DigitLayout,
-    cos_layout: ArrayLayout<2>,
     is_nd: bool,
 ) where
     U: PosTy + Clone,
     T: Float,
 {
+    let (x, dt, shape, strides, offset) = (x.get(), x.dt(), x.shape(), x.strides(), x.offset());
     assert_eq!(shape.len(), 3);
     assert_eq!(strides.len(), 3);
     let nh = shape[0];
@@ -242,6 +244,10 @@ fn rope<T, U>(
     });
     assert_eq!(rope_section.len(), grid.len());
     assert_eq!(dh / 2, rope_section.iter().sum());
+
+    let (pos, pos_dt, pos_layout) = (pos.get(), pos.dt(), pos.layout());
+    let (sin, sin_dt, sin_layout) = (sin.get(), sin.dt(), sin.layout());
+    let (cos, cos_dt, cos_layout) = (cos.get(), cos.dt(), cos.layout());
 
     if let types::F16 = dt {
         assert_eq!(sin_dt, types::F32);
@@ -268,7 +274,7 @@ fn rope<T, U>(
         s_sin_1: sin_layout.strides()[1] * size_of::<T>() as isize,
         s_cos_0: cos_layout.strides()[0] * size_of::<T>() as isize,
         s_cos_1: cos_layout.strides()[1] * size_of::<T>() as isize,
-        x: unsafe { (*x).as_ptr().byte_offset(offset as isize) } as *mut u8,
+        x: unsafe { (*x).as_ptr().byte_offset(offset) } as *mut u8,
         pos: pos.as_ptr() as *const u8,
         sin: sin.as_ptr() as *const u8,
         cos: cos.as_ptr() as *const u8,
@@ -299,87 +305,31 @@ fn rope<T, U>(
 }
 
 pub fn rope_nd<T, U>(
-    x: &&mut [u8],
-    dt: DigitLayout,
-    shape: &[usize],
-    strides: &[isize],
-    offset: usize,
+    x: Tensor<&mut [u8], 3>,
+    pos: Tensor<Box<[U]>, 2>,
+    sin: Tensor<Box<[T]>, 2>,
+    cos: Tensor<Box<[T]>, 2>,
     grid: &[usize],
     rope_section: Option<Vec<usize>>,
-    pos: Box<[U]>,
-    pos_dt: DigitLayout,
-    pos_layout: ArrayLayout<2>,
-    sin: Box<[T]>,
-    sin_dt: DigitLayout,
-    sin_layout: ArrayLayout<2>,
-    cos: Box<[T]>,
-    cos_dt: DigitLayout,
-    cos_layout: ArrayLayout<2>,
 ) where
     U: PosTy + Clone,
     T: Float,
 {
-    rope(
-        x,
-        dt,
-        shape,
-        strides,
-        offset,
-        grid,
-        rope_section,
-        pos,
-        pos_dt,
-        pos_layout,
-        sin,
-        sin_dt,
-        sin_layout,
-        cos,
-        cos_dt,
-        cos_layout,
-        true,
-    );
+    rope(x, pos, sin, cos, grid, rope_section, true);
 }
 
 pub fn rope_m<T, U>(
-    x: &&mut [u8],
-    dt: DigitLayout,
-    shape: &[usize],
-    strides: &[isize],
-    offset: usize,
+    x: Tensor<&mut [u8], 3>,
+    pos: Tensor<Box<[U]>, 2>,
+    sin: Tensor<Box<[T]>, 2>,
+    cos: Tensor<Box<[T]>, 2>,
     grid: &[usize],
     rope_section: Option<Vec<usize>>,
-    pos: Box<[U]>,
-    pos_dt: DigitLayout,
-    pos_layout: ArrayLayout<2>,
-    sin: Box<[T]>,
-    sin_dt: DigitLayout,
-    sin_layout: ArrayLayout<2>,
-    cos: Box<[T]>,
-    cos_dt: DigitLayout,
-    cos_layout: ArrayLayout<2>,
 ) where
     U: PosTy + Clone,
     T: Float,
 {
-    rope(
-        x,
-        dt,
-        shape,
-        strides,
-        offset,
-        grid,
-        rope_section,
-        pos,
-        pos_dt,
-        pos_layout,
-        sin,
-        sin_dt,
-        sin_layout,
-        cos,
-        cos_dt,
-        cos_layout,
-        false,
-    );
+    rope(x, pos, sin, cos, grid, rope_section, false);
 }
 
 // #[test]
