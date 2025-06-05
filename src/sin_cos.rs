@@ -99,7 +99,7 @@ where
     [sin.into(), cos.into()]
 }
 
-pub fn sin_cos_default<T>(
+pub fn sin_cos_nd<T>(
     shape: &[usize],
     grid: &[usize],
     rope_section: Option<Vec<usize>>,
@@ -134,20 +134,56 @@ where
     [sin, cos]
 }
 
-/// row_max = seq; col_max = dh/2;
-/// todo
-pub fn sin_cos_qwen2vl_3d_mrope<T>(
-    row_max: usize,
-    col_max: usize,
-    theta: T,
-) -> [Tensor<Box<[T]>, 2>; 2]
-where
-    T: Float + std::ops::Neg<Output = T> + std::ops::Div<Output = T> + std::ops::Mul<Output = T>,
-{
-    let [sin, cos] = build_sin_cos_table(row_max, col_max, theta, |theta, pos| theta * pos);
-    let layout = ArrayLayout::<2>::new(&[row_max, col_max], &[col_max as isize, 1], 0);
-
-    let sin = Tensor::from_raw_parts(T::dt(), layout.clone(), sin);
-    let cos = Tensor::from_raw_parts(T::dt(), layout.clone(), cos);
-    [sin, cos]
+#[test]
+fn test_sin_cos_nd_f16() {
+    let shape = [2, 4, 8];
+    let grid = [2, 2];
+    let rope_section = Some(vec![2, 2]);
+    let theta = f16::from_f32(10000.0);
+    let [sin, cos] = sin_cos_nd::<f16>(&shape, &grid, rope_section, theta);
+    assert_eq!(sin.shape(), &[2, 2]);
+    assert_eq!(cos.shape(), &[2, 2]);
 }
+
+#[test]
+fn test_sin_cos_nd_f32() {
+    let shape = [2, 4, 8];
+    let grid = [2, 2];
+    let rope_section = Some(vec![2, 2]);
+    let theta = 10000.0;
+    let [sin, cos] = sin_cos_nd::<f32>(&shape, &grid, rope_section, theta);
+    assert_eq!(sin.shape(), &[2, 2]);
+    assert_eq!(cos.shape(), &[2, 2]);
+}
+
+#[test]
+fn test_sin_cos_nd_f64() {
+    let shape = [2, 4, 8];
+    let grid = [2, 2];
+    let rope_section = Some(vec![2, 2]);
+    let theta = 10000.0;
+    let [sin, cos] = sin_cos_nd::<f64>(&shape, &grid, rope_section, theta);
+    assert_eq!(sin.shape(), &[2, 2]);
+    assert_eq!(cos.shape(), &[2, 2]);
+}
+
+// /// normal sin_cos
+// /// 3dmrope_llm
+// /// todo
+// pub fn sin_cos<T>(
+//     nctx: usize,
+//     dh: usize,
+//     theta: T,
+// ) -> [Tensor<Box<[T]>, 2>; 2]
+// where
+//     T: Float + std::ops::Neg<Output = T> + std::ops::Div<Output = T> + std::ops::Mul<Output = T>,
+// {
+//     let rol_max = nctx;
+//     let col_max = dh / 2;
+//     let [sin, cos] = build_sin_cos_table(row_max, col_max, theta, |theta, pos| theta * pos);
+//     let layout = ArrayLayout::<2>::new(&[row_max, col_max], &[col_max as isize, 1], 0);
+
+//     let sin = Tensor::from_raw_parts(T::dt(), layout.clone(), sin);
+//     let cos = Tensor::from_raw_parts(T::dt(), layout.clone(), cos);
+//     [sin, cos]
+// }

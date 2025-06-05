@@ -1,4 +1,4 @@
-pub mod permute;
+mod permute;
 pub mod pos_ids;
 pub mod sin_cos;
 
@@ -11,16 +11,16 @@ use std::{
 };
 use tensor::Tensor;
 
-use pos_ids::PosTy;
-use sin_cos::Float;
+use pos_ids::{PosTy, pos_nd};
+use sin_cos::{Float, sin_cos_nd};
 
-pub fn tensor<'a>(
-    x: &'a mut [u8],
+pub fn tensor(
+    x: &mut [u8],
     dt: DigitLayout,
     shape: [usize; 3],
     strides: [isize; 3],
     offset: isize,
-) -> Tensor<&'a mut [u8], 3> {
+) -> Tensor<&mut [u8], 3> {
     Tensor::from_raw_parts(dt, ArrayLayout::<3>::new(&shape, &strides, offset), x)
 }
 
@@ -119,14 +119,14 @@ impl Scheme {
             rope_section,
         } = self;
 
-        let x = x.cast::<[f32; 2]>();
-        let pos = pos.cast::<u32>();
-        let sin = sin.cast::<f32>();
-        let cos = cos.cast::<f32>();
+        let x = x.cast::<[T; 2]>();
+        let pos = pos.cast::<U>();
+        let sin = sin.cast::<T::ComputeType>();
+        let cos = cos.cast::<T::ComputeType>();
         let rope_section = rope_section.cast::<u32>();
 
         let dh = dh / 2;
-        let s_x_2 = size_of::<[f32; 2]>() as isize;
+        let s_x_2 = size_of::<[T; 2]>() as isize;
         for i in 0..nh * mid * dh {
             let i0 = (i / (mid * dh)) as isize;
             let i1 = ((i / dh) % (mid)) as isize;
@@ -142,13 +142,19 @@ impl Scheme {
             }
             let i4 = remaining as isize;
 
-            let pos =
-                unsafe { pos.byte_offset(i1 * s_pos_0 + i3 as isize * s_pos_1).read() } as isize;
+            let pos = unsafe {
+                pos.byte_offset(i1 * s_pos_0 + i3 as isize * s_pos_1)
+                    .read()
+                    .pos()
+            } as isize;
             let sin = unsafe { sin.byte_offset(pos * s_sin_0 + i4 * s_sin_1).read() };
             let cos = unsafe { cos.byte_offset(pos * s_cos_0 + i4 * s_cos_1).read() };
 
             let [a, b] = *x;
-            *x = [a * cos - b * sin, a * sin + b * cos];
+            let [a, b] = [a.to_compute(), b.to_compute()];
+            let [res1, res2] = [a * cos - b * sin, a * sin + b * cos];
+
+            *x = [T::from_compute(res1), T::from_compute(res2)];
         }
     }
 
@@ -250,6 +256,7 @@ fn rope<T, U>(
     let (cos, cos_dt, cos_layout) = (cos.get(), cos.dt(), cos.layout());
 
     if let types::F16 = dt {
+        // f16的张量计算时需要传f32的sin_cos提高精度
         assert_eq!(sin_dt, types::F32);
         assert_eq!(cos_dt, types::F32);
     } else {
@@ -280,7 +287,7 @@ fn rope<T, U>(
         cos: cos.as_ptr() as *const u8,
     };
 
-    // 根据 is_nd和dt 调用不同的计算方法
+    // 根据 is_nd 和 dt 调用不同的计算方法
     if is_nd {
         match (dt, pos_dt) {
             (types::F16, types::U32) => scheme.calculate_nd::<f16, u32>(),
@@ -332,62 +339,219 @@ pub fn rope_m<T, U>(
     rope(x, pos, sin, cos, grid, rope_section, false);
 }
 
-// #[test]
-// fn test_n() {
-//     let shape = [1, 2, 4]; // [nh, seq, dh]
-//     let nh = shape[0];
-//     let dh = shape[shape.len() - 1];
-//     let mid: usize = shape.iter().product::<usize>() / (nh * dh);
+fn test_rope_nm<T, U, S>(
+    data: Option<Vec<T>>,
+    shape: [usize; 3],
+    grid: Vec<usize>,
+    rope_section: Option<Vec<usize>>,
+    is_pos_nd: bool,
+    is_nd: bool,
+) -> Vec<T>
+where
+    U: PosTy + Clone,
+    T: Float + std::ops::Neg<Output = T> + std::ops::Div<Output = T> + std::ops::Mul<Output = T>,
+    S: Float + std::ops::Neg<Output = S> + std::ops::Div<Output = S> + std::ops::Mul<Output = S>,
+{
+    let nh = shape[0];
+    let mid = shape[1];
+    let dh = shape[2];
+    let size = std::mem::size_of::<T>();
+    let mut data = data.unwrap_or_else(|| {
+        (0..(nh * mid * dh))
+            .map(|i| T::from_usize(i))
+            .collect::<Vec<T>>() // x1设为递增序列
+    });
+    let x1 =
+        unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr() as *mut u8, size * data.len()) };
+    let dt = T::dt();
+    let shape = [nh, mid, dh];
+    let strides = [
+        (mid * dh * size) as isize,
+        (dh * size) as isize,
+        size as isize,
+    ];
+    let offset = 0;
+    let x = tensor(x1, dt, shape, strides, offset);
 
-//     // -------nd--------
-//     let x: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x设为递增序列
-//     let x = rope_nd(x, &shape, None, None);
+    let pos = if is_pos_nd {
+        pos_nd::<U>(grid.clone())
+    } else {
+        assert_eq!(grid.len(), 2);
+        let d_patch = 14;
+        let h = grid[0] * d_patch;
+        let w = grid[1] * d_patch;
+        pos_ids::pos_2d_qwen2vl_vit::<U>([h, w], d_patch)
+    };
 
-//     let x = x.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
-//     for chunk in &x {
-//         println!("{:?}", chunk);
-//     }
-// }
+    let [sin, cos] = sin_cos_nd::<S>(&shape, &grid, rope_section.clone(), S::from_f32(10000.0));
 
-// #[test]
-// fn test_m() {
-//     let shape = [1, 2, 4]; // [nh, seq, dh]
-//     let nh = shape[0];
-//     let dh = shape[shape.len() - 1];
-//     let mid: usize = shape.iter().product::<usize>() / (nh * dh);
+    if is_nd {
+        rope_nd(x, pos, sin, cos, &grid, rope_section);
+    } else {
+        rope_m(x, pos, sin, cos, &grid, rope_section);
+    }
 
-//     // -------m--------
-//     let x1: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x1设为递增序列
-//     let x1 = rope_m(x1, &shape, None, None);
+    let x1 = unsafe { std::slice::from_raw_parts_mut(x1.as_mut_ptr() as *mut T, nh * mid * dh) };
+    x1.to_vec()
+}
 
-//     let x1 = x1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
-//     for chunk in &x1 {
-//         println!("{:?}", chunk);
-//     }
-// }
+#[test]
+fn test_nd_f16_u32_u64() {
+    let shape = [1, 2, 4]; // [nh, seq, dh]
+    let grid = [2];
+    let is_pos_nd = true;
+    let is_nd = true;
 
-// #[test]
-// fn test_nm() {
-//     let shape = [1, 2, 4]; // [nh, seq, dh]
-//     let nh = shape[0];
-//     let dh = shape[shape.len() - 1];
-//     let mid: usize = shape.iter().product::<usize>() / (nh * dh);
+    // data 默认递增初始化
+    // f16的张量计算时需要传f32的sin_cos提高精度
+    let x_f16_u32 =
+        test_rope_nm::<f16, u32, f32>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+    let x_f16_u64 =
+        test_rope_nm::<f16, u64, f32>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
 
-//     // -------nd--------
-//     let x: Vec<f32> = (0..(nh * mid * dh)).map(|i| i as f32).collect(); // x设为递增序列
-//     let x = rope_nd(x, &shape, None, None);
+    let ans = [
+        0.0, 1.0, 2.0, 3.0, -2.046875, 6.0664063, 5.9296875, 7.0585938,
+    ]
+    .iter()
+    .map(|&x| f16::from_f32(x))
+    .collect::<Vec<_>>();
+    assert_eq!(x_f16_u32, ans);
+    assert_eq!(x_f16_u64, ans);
+}
 
-//     let x = x.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
-//     for chunk in &x {
-//         println!("{:?}", chunk);
-//     }
+#[test]
+fn test_nd_f32_u32_u64() {
+    let shape = [1, 2, 4]; // [nh, seq, dh]
+    let grid = [2];
+    let is_pos_nd = true;
+    let is_nd = true;
 
-//     // -------m--------
-//     let x1: Vec<f32> = vec![0.0, 2.0, 1.0, 3.0, 4.0, 6.0, 5.0, 7.0];
-//     let x1 = rope_m(x1, &shape, None, None);
+    // data 默认递增初始化
+    let x_f32_u32 =
+        test_rope_nm::<f32, u32, f32>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+    let x_f32_u64 =
+        test_rope_nm::<f32, u64, f32>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
 
-//     let x1 = x1.chunks(dh).map(|x| x.to_vec()).collect::<Vec<_>>();
-//     for chunk in &x1 {
-//         println!("{:?}", chunk);
-//     }
-// }
+    let ans = [
+        0.0, 1.0, 2.0, 3.0, -2.0461454, 6.067395, 5.9297013, 7.059649,
+    ];
+    assert_eq!(x_f32_u32, ans);
+    assert_eq!(x_f32_u64, ans);
+}
+
+#[test]
+fn test_nd_f64_u32_u64() {
+    let shape = [1, 2, 4]; // [nh, seq, dh]
+    let grid = [2];
+    let is_pos_nd = true;
+    let is_nd = true;
+
+    // data 默认递增初始化
+    let x_f64_u32 =
+        test_rope_nm::<f64, u32, f64>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+    let x_f64_u64 =
+        test_rope_nm::<f64, u64, f64>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+
+    let ans = [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        -2.0461457005669237,
+        6.067395468572284,
+        5.9297011691608255,
+        7.059649002921657,
+    ];
+    assert_eq!(x_f64_u32, ans);
+    assert_eq!(x_f64_u64, ans);
+}
+
+#[test]
+fn test_m_2d_qwen2vl_f16_u32_u64() {
+    let shape = [16, 816, 80]; // [nh, seq, dh]
+    let grid = [24, 34];
+    let is_pos_nd = false; // 使用qw2en2vl的pos_ids
+    let is_nd = false;
+
+    // f16的张量计算时需要传f32的sin_cos提高精度
+    let x_f16_u32 =
+        test_rope_nm::<f16, u32, f32>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+    let x_f16_u64 =
+        test_rope_nm::<f16, u64, f32>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+
+    // f16容量有限，递增初始化会溢出, 只看看部分值
+    let start = 1145;
+    let end = start + 20;
+    let ans = [
+        276.0, 626.5, 833.5, 956.5, 1031.0, 1077.0, 1105.0, 1123.0, 1135.0, 1143.0, 1148.0, 1151.0,
+        1154.0, 1156.0, 1158.0, 1569.0, 1599.0, 1506.0, 1406.0, 1327.0,
+    ]
+    .iter()
+    .map(|&x| f16::from_f32(x))
+    .collect::<Vec<_>>();
+    assert_eq!(x_f16_u32[start..end], ans);
+    assert_eq!(x_f16_u64[start..end], ans);
+}
+
+#[test]
+fn test_m_2d_qwen2vl_f32_u32_u64() {
+    let shape = [16, 816, 80]; // [nh, seq, dh]
+    let grid = [24, 34];
+    let is_pos_nd = false; // 使用qw2en2vl的pos_ids
+    let is_nd = false;
+
+    let x_f32_u32 =
+        test_rope_nm::<f32, u32, f32>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+    let x_f32_u64 =
+        test_rope_nm::<f32, u64, f32>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+
+    let start = 1145;
+    let end = start + 20;
+    let ans = [
+        275.9079, 626.51355, 833.59015, 956.6164, 1030.9128, 1076.5735, 1105.0979, 1123.2014,
+        1134.8898, 1142.5938, 1147.8093, 1151.464, 1154.1375, 1156.1931, 1157.8593, 1569.198,
+        1598.7628, 1506.0979, 1405.6301, 1326.8085,
+    ];
+    assert_eq!(x_f32_u32[start..end], ans);
+    assert_eq!(x_f32_u64[start..end], ans);
+}
+
+#[test]
+fn test_m_2d_qwen2vl_f64_u32_u64() {
+    let shape = [16, 816, 80]; // [nh, seq, dh]
+    let grid = [24, 34];
+    let is_pos_nd = false; // 使用qw2en2vl的pos_ids
+    let is_nd = false;
+
+    let x_f64_u32 =
+        test_rope_nm::<f64, u32, f64>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+    let x_f64_u64 =
+        test_rope_nm::<f64, u64, f64>(None, shape, grid.to_vec(), None, is_pos_nd, is_nd);
+
+    let start = 1145;
+    let end = start + 20;
+    let ans = [
+        275.90794809846454,
+        626.5134874971391,
+        833.5901795130417,
+        956.6163510896864,
+        1030.912878552941,
+        1076.5734532149459,
+        1105.0978574227604,
+        1123.201454822187,
+        1134.8896511868547,
+        1142.593819779052,
+        1147.8092530822926,
+        1151.4639771070692,
+        1154.1374963230123,
+        1156.1931415493236,
+        1157.8593039794746,
+        1569.1981777918863,
+        1598.762818931396,
+        1506.0979613104353,
+        1405.6301400223888,
+        1326.8085402953352,
+    ];
+    assert_eq!(x_f64_u32[start..end], ans);
+    assert_eq!(x_f64_u64[start..end], ans);
+}
