@@ -1,7 +1,15 @@
+#![doc = include_str!("../README.md")]
+#![deny(warnings, missing_docs)]
+#![allow(rustdoc::broken_intra_doc_links)] // cargo doc 公式识别问题
+
+/// 验证 `rope_nd` 和 `rope_m` 两种实现的转换
 mod permute;
+/// `pos_ids` 的多种计算方法
 pub mod pos_ids;
+/// `sin_cos` 的多种计算方法
 pub mod sin_cos;
 
+use any_tensor::Tensor;
 use digit_layout::{DigitLayout, types};
 use half::f16;
 use ndarray_layout::ArrayLayout;
@@ -9,19 +17,29 @@ use std::{
     fmt::Display,
     ops::{Add, Mul, Sub},
 };
-use tensor::Tensor;
 
 use pos_ids::{PosTy, pos_nd};
 use sin_cos::{Float, sin_cos_nd};
 
+/// 把原始数据包装为张量
 pub fn tensor(
     x: &mut [u8],
     dt: DigitLayout,
-    shape: [usize; 3],
-    strides: [isize; 3],
-    offset: isize,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: usize,
 ) -> Tensor<&mut [u8], 3> {
-    Tensor::from_raw_parts(dt, ArrayLayout::<3>::new(&shape, &strides, offset), x)
+    assert_eq!(shape.len(), 3);
+    assert_eq!(strides.len(), 3);
+    Tensor::from_raw_parts(
+        dt,
+        ArrayLayout::<3>::new(
+            &[shape[0], shape[1], shape[2]],
+            &[strides[0], strides[1], strides[2]],
+            offset as isize,
+        ),
+        x,
+    )
 }
 
 struct Scheme {
@@ -59,8 +77,8 @@ impl Pos for u64 {
     }
 }
 
-/// 计算时f16转f32; f32, f64不变;
-/// 张量类型为f16时，sin_cos为f32，提高精度;
+/// 计算时 f16 转 f32; f32, f64不变。
+/// 张量类型为 f16 时，sin_cos 为 f32，提高精度。
 trait Data: Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Copy {
     type ComputeType: Data + Display;
     fn to_compute(self) -> Self::ComputeType;
@@ -98,6 +116,16 @@ impl Data for f64 {
 }
 
 impl Scheme {
+    /// ### `rope_m``
+    /// - `RoPE` 论文中原版实现，每两个相邻元素一组，在本项目中称为 `rope_nd`。
+    /// #### 类型支持
+    /// - `x`: `f16`, `f32`, `f64`
+    /// - `sin`, `cos`: `f16`, `f32`, `f64`
+    /// - `pos`: `u32`, `u64`
+    /// - f16 的张量计算时需要传 f32 的 sin_cos 提高精度
+    ///
+    /// #### `rope_section`
+    /// - 可设置来分配各个维度的权重
     fn calculate_nd<T: Data + Display, U: Pos>(&self) {
         let &Self {
             nh,
@@ -158,6 +186,16 @@ impl Scheme {
         }
     }
 
+    /// ### `rope_m``
+    /// - huggingface 中实现，相距 d/2 的每两个元素一组, 在本项目中称为 rope_m。
+    /// #### 类型支持
+    /// - `x`: `f16`, `f32`, `f64`
+    /// - `sin`, `cos`: `f16`, `f32`, `f64`
+    /// - `pos`: `u32`, `u64`
+    /// - f16 的张量计算时需要传 f32 的 sin_cos 提高精度
+    ///
+    /// #### `rope_section`
+    /// - 可设置来分配各个维度的权重
     fn calculate_m<T: Data + Display, U: Pos>(&self) {
         let &Self {
             nh,
@@ -222,6 +260,7 @@ impl Scheme {
     }
 }
 
+/// 取出 `tensor` 包装的参数，调用对应的 `calculate` 函数
 fn rope<T, U>(
     x: Tensor<&mut [u8], 3>,
     pos: Tensor<Box<[U]>, 2>,
@@ -311,6 +350,7 @@ fn rope<T, U>(
     };
 }
 
+/// 调用 `rope_nd` 的接口
 pub fn rope_nd<T, U>(
     x: Tensor<&mut [u8], 3>,
     pos: Tensor<Box<[U]>, 2>,
@@ -325,6 +365,7 @@ pub fn rope_nd<T, U>(
     rope(x, pos, sin, cos, grid, rope_section, true);
 }
 
+/// 调用 `rope_m` 的接口
 pub fn rope_m<T, U>(
     x: Tensor<&mut [u8], 3>,
     pos: Tensor<Box<[U]>, 2>,
@@ -339,7 +380,13 @@ pub fn rope_m<T, U>(
     rope(x, pos, sin, cos, grid, rope_section, false);
 }
 
-fn test_rope_nm<T, U, S>(
+/// `rope_nd` 和 `rope_m` 的泛型测试函数
+/// ### 泛型支持
+/// - `data`: `f16`, `f32`, `f64`
+/// - `sin`, `cos`: `f16`, `f32`, `f64`
+/// - `pos`: `u32`, `u64`
+/// - f16 的张量计算时需要传 f32 的 sin_cos 提高精度
+pub fn test_rope_nm<T, U, S>(
     data: Option<Vec<T>>,
     shape: [usize; 3],
     grid: Vec<usize>,
@@ -371,7 +418,7 @@ where
         size as isize,
     ];
     let offset = 0;
-    let x = tensor(x1, dt, shape, strides, offset);
+    let x = tensor(x1, dt, shape.to_vec(), strides.to_vec(), offset);
 
     let pos = if is_pos_nd {
         pos_nd::<U>(grid.clone())

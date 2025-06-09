@@ -1,11 +1,16 @@
 [package]
 name = "ndrope"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+authors = ["CearX <xhclear@outlook.com>"]
+description = "N-dimensional Rotary Position Embeddings"
+documentation = "https://docs.rs/ndrope"
+license = "MIT"
+repository = "https://github.com/CearX/ndrope"
 
 [dependencies]
 ndarray = "0.16.1"
 half = "2.4"
 digit-layout = "0.3.1"
 ndarray-layout = "0.2.1"
-tensor = { git = "https://github.com/YdrMaster/tensor.git" }
+any-tensor = "0.0.0"

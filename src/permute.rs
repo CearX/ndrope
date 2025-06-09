@@ -1,7 +1,9 @@
 use crate::test_rope_nm;
 use ndarray::{Array2, Array3};
 
-/// 测试 nd 和 m 两种实现的转换
+/// 验证 `rope_nd` 和 `rope_m` 两种实现的转换
+/// - pos_ids 计算方式为 pos_nd()
+/// - [allow(dead_code)]：只有测试时使用
 #[allow(dead_code)]
 fn test_permute_nm(grid_shape: &[usize], rope_section: Option<Vec<usize>>) {
     let nh = grid_shape[0];
@@ -93,7 +95,7 @@ fn test_permute() {
 
 #[test]
 fn test_section() {
-    let grid_shape = [2, 8, 2, 4, 16]; // [nh, t, h, w, dh], 可以改变维度顺序，会体现在pos_ids上
+    let grid_shape = [2, 8, 2, 4, 16]; // [nh, t, h, w, dh], 可以改变维度顺序，会体现在 pos_ids 上
     let rope_section = Some(vec![2, 2, 4]); // 可以手动设置各个维度的大小, 不设置则默认均分
     test_permute_nm(&grid_shape, rope_section);
 }

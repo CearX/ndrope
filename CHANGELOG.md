@@ -5,14 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2025-6-9
 
 ### Added
+
+- docs
+- README
+- LICENSE
 
 ### Changed
 
 - 支持 n 维 pos 输出 layout
-- 使用 tensor 简化api
+- 使用 tensor 简化 api
+- 规范代码，通过 clippy
+- 简化测试代码，提高测试覆盖率, 测试 f16, f32, f64, u32, u64 类型的组合
 
 ## [0.1.0] - 2025-6-4
 

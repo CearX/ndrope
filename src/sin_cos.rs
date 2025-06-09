@@ -1,13 +1,19 @@
+use any_tensor::Tensor;
 use digit_layout::{DigitLayout, types};
 use half::f16;
 use ndarray_layout::ArrayLayout;
-use tensor::Tensor;
 
+/// 用于计算泛型 `sin_cos` 的trait
 pub trait Float: Copy {
+    /// 返回类型布局
     fn dt() -> DigitLayout;
+    /// 从 usize 转换到具体浮点类型
     fn from_usize(n: usize) -> Self;
+    /// 从 f32 转换到具体浮点类型
     fn from_f32(n: f32) -> Self;
+    /// 用于所需泛型的 powf 函数
     fn powf(self, n: Self) -> Self;
+    /// 用于所需泛型的 sin_cos函数
     fn sin_cos(self) -> (Self, Self);
 }
 
@@ -99,6 +105,10 @@ where
     [sin.into(), cos.into()]
 }
 
+/// n 维 rope 的 `sin_cos` 计算方法
+/// - 主要是通过 `grid` 和 `rope_section` 得到 `sin` 和 `cos` 的形状，传入 `build_sin_cos_table` 函数进行计算
+/// - 返回包装为 `tensor` 的 `sin` 和 `cos`
+/// - 兼容数据类型：`f16`, `f32`, `f64`
 pub fn sin_cos_nd<T>(
     shape: &[usize],
     grid: &[usize],
